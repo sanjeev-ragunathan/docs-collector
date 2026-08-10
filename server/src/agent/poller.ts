@@ -50,12 +50,20 @@ async function handleClassifiedEmail(
     );
 
     if (attachments.length > stillNeeded.length) {
-      await sendTooManyDocumentsEmail(employee, stillNeeded);
-      logEvent(
-        employee.id,
-        "TOO_MANY_DOCS",
-        `Received ${attachments.length} attachment(s) but only ${stillNeeded.length} document(s) are still needed. Asked candidate to resend only what's requested.`
-      );
+      // Deliberately skips the LLM validation pass entirely for this email — sending too
+      // many attachments doesn't need Claude to tell us that, so we save the calls/cost
+      // and reply immediately. Reminder state (nextActionAt/reminderCount/status) is left
+      // untouched here on purpose — the normal reminder cadence keeps running unaffected.
+      try {
+        await sendTooManyDocumentsEmail(employee, stillNeeded);
+        logEvent(
+          employee.id,
+          "TOO_MANY_DOCS",
+          `Received ${attachments.length} attachment(s) but only ${stillNeeded.length} document(s) are still needed. Asked candidate to resend only what's requested.`
+        );
+      } catch (err: any) {
+        logEvent(employee.id, "ERROR", `Failed to send too-many-documents email: ${err.message}`);
+      }
       return;
     }
 
@@ -160,11 +168,16 @@ export async function pollInbox(): Promise<void> {
         const bodyText = parsed.text || parsed.html?.toString() || "";
         // Attachment bytes come straight from the parsed MIME source (already in memory
         // from the fetch above) — never written to disk, discarded once this loop iteration ends.
-        const attachments: RawAttachment[] = (parsed.attachments || []).map((a) => ({
-          filename: a.filename || "attachment",
-          contentType: a.contentType || "",
-          content: a.content,
-        }));
+        // Inline assets (e.g. a signature logo referenced via cid:) show up in
+        // parsed.attachments too — excluded here so they don't inflate the attachment
+        // count or get sent to the validator as if they were a submitted document.
+        const attachments: RawAttachment[] = (parsed.attachments || [])
+          .filter((a) => a.contentDisposition !== "inline")
+          .map((a) => ({
+            filename: a.filename || "attachment",
+            contentType: a.contentType || "",
+            content: a.content,
+          }));
 
         // Mark seen regardless of whether we can match, to avoid reprocessing loops.
         await client.messageFlagsAdd({ uid: String(uid) } as any, ["\\Seen"], { uid: true });
