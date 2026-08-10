@@ -71,6 +71,19 @@ same request/reminder flow for just those docs.
 This is exactly what `runTick()` (`server/src/agent/tick.ts`) does on every cron cycle: run the
 reminder engine, then poll the inbox and classify/validate anything new.
 
+## Screenshot
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="./images/all-docs-added-validated.png" width="100%" alt="All documents added and validated">
+    </td>
+    <td width="50%">
+      <img src="./images/add-new-employee.png" width="100%" alt="Add new employee">
+    </td>
+  </tr>
+</table>
+
 ## Run
 
 ### 1. Create a Gmail App Password
