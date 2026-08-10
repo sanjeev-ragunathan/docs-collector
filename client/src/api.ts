@@ -30,3 +30,16 @@ export async function runTick(): Promise<void> {
   const res = await fetch(`${BASE}/tick`, { method: "POST" });
   if (!res.ok) throw new Error("Failed to run agent tick");
 }
+
+export async function requestMoreDocs(employeeId: number, additionalDocs: string[]): Promise<Employee> {
+  const res = await fetch(`${BASE}/employees/${employeeId}/request-more-docs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ additionalDocs }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Failed to request more documents" }));
+    throw new Error(err.error || "Failed to request more documents");
+  }
+  return res.json();
+}

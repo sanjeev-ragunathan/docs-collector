@@ -1,8 +1,14 @@
 import { config } from "../lib/config";
-import { listEmployeesForTick, updateEmployee, logEvent, getEmployee } from "../db/models";
+import { listEmployeesForTick, updateEmployee, logEvent } from "../db/models";
 import { sendReminderEmail } from "../email/sender";
 import { pollInbox } from "./poller";
 
+/**
+ * One reminder cadence (reminderCount/MAX_REMINDERS) for every non-paused employee not
+ * yet at ALL_DOCS/HR_INTERVENTION — whether they haven't responded at all yet, or have
+ * submitted something but it's still partial/invalid (sendReminderEmail's content reflects
+ * whatever's actually still outstanding either way). Once exhausted, escalate to HR.
+ */
 async function runReminderEngine(): Promise<void> {
   const now = Date.now();
   const candidates = listEmployeesForTick();
@@ -17,7 +23,7 @@ async function runReminderEngine(): Promise<void> {
         const newCount = employee.reminderCount + 1;
         const nextActionAt = new Date(now + config.reminderGapMinutes * 60_000).toISOString();
         updateEmployee(employee.id, {
-          status: "REMINDER_SENT",
+          status: employee.status === "PARTIAL_DOCS" ? "PARTIAL_DOCS" : "REMINDER_SENT",
           reminderCount: newCount,
           nextActionAt,
         });
@@ -26,11 +32,11 @@ async function runReminderEngine(): Promise<void> {
         logEvent(employee.id, "ERROR", `Failed to send reminder: ${err.message}`);
       }
     } else {
-      updateEmployee(employee.id, { status: "HR_INTERVENTION" });
+      updateEmployee(employee.id, { paused: true, status: "HR_INTERVENTION" });
       logEvent(
         employee.id,
         "HR_INTERVENTION",
-        `Max reminders (${config.maxReminders}) reached with no response. Escalated to HR.`
+        `Max reminders (${config.maxReminders}) reached with onboarding still incomplete. Escalated to HR.`
       );
     }
   }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Employee } from "../types";
 import { StatusBadge } from "./StatusBadge";
+import { VerdictBadge } from "./VerdictBadge";
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
@@ -11,7 +12,13 @@ function formatDate(iso: string): string {
   });
 }
 
-export function EmployeeRow({ employee }: { employee: Employee }) {
+export function EmployeeRow({
+  employee,
+  onRequestMoreDocs,
+}: {
+  employee: Employee;
+  onRequestMoreDocs: () => void;
+}) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -41,10 +48,21 @@ export function EmployeeRow({ employee }: { employee: Employee }) {
         <td className="px-4 py-3 text-slate-500">
           {employee.receivedDocs.length}/{employee.requiredDocs.length} received
         </td>
+        <td className="px-4 py-3">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onRequestMoreDocs();
+            }}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Request More Docs
+          </button>
+        </td>
       </tr>
       {expanded && (
         <tr className="border-b border-slate-100 bg-slate-50/70">
-          <td colSpan={5} className="px-4 py-4">
+          <td colSpan={6} className="px-4 py-4">
             <div className="mb-3 flex flex-wrap gap-4 text-xs text-slate-500">
               <span>
                 <span className="font-medium text-slate-600">Required:</span>{" "}
@@ -61,6 +79,43 @@ export function EmployeeRow({ employee }: { employee: Employee }) {
                 </span>
               )}
             </div>
+            {employee.docValidations.length > 0 && (
+              <>
+                <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Document Validation
+                </h4>
+                <div className="mb-4 grid gap-2 sm:grid-cols-2">
+                  {employee.docValidations.map((v) => (
+                    <div
+                      key={v.docType}
+                      className="rounded-lg border border-slate-200 bg-white p-3 text-xs"
+                    >
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <span className="font-medium text-slate-700">{v.docType}</span>
+                        <VerdictBadge verdict={v.verdict} />
+                      </div>
+                      <p className="text-slate-400">
+                        {v.filename} · confidence {(v.confidence * 100).toFixed(0)}%
+                      </p>
+                      {(v.fields.fullName || v.fields.dateOfBirth || v.fields.expirationDate) && (
+                        <p className="mt-1 text-slate-500">
+                          {v.fields.fullName && <>{v.fields.fullName}</>}
+                          {v.fields.dateOfBirth && <> · DOB {v.fields.dateOfBirth}</>}
+                          {v.fields.expirationDate && <> · Expires {v.fields.expirationDate}</>}
+                        </p>
+                      )}
+                      {v.issues.length > 0 && (
+                        <ul className="mt-1 list-disc pl-4 text-slate-500">
+                          {v.issues.map((issue, i) => (
+                            <li key={i}>{issue}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
             <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
               Event Timeline
             </h4>

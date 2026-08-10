@@ -20,6 +20,7 @@ export const config = {
   maxReminders: Number(process.env.MAX_REMINDERS || 3),
   pollCron: process.env.POLL_CRON || "*/1 * * * *",
   port: Number(process.env.PORT || 4000),
+  confidenceThreshold: Number(process.env.CONFIDENCE_THRESHOLD || 0.6),
 };
 
 export const DOC_OPTIONS = [

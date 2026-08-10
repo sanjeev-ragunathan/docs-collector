@@ -10,16 +10,21 @@ import {
   type Employee,
 } from "../db/models";
 import { classifyEmail } from "./classifier";
-import { sendMissingDocsFollowUpEmail, sendQuestionReplyEmail } from "../email/sender";
+import { summarizeDocState, validateAttachments, type RawAttachment } from "./validator";
+import { sendDocumentFeedbackEmail, sendQuestionReplyEmail, sendTooManyDocumentsEmail } from "../email/sender";
 
 async function findEmployeeForMessage(fromAddress: string): Promise<Employee | undefined> {
   return findEmployeeByEmail(fromAddress);
 }
 
-async function handleClassifiedEmail(employee: Employee, emailBody: string, attachmentFilenames: string[]) {
+async function handleClassifiedEmail(
+  employee: Employee,
+  emailBody: string,
+  attachments: RawAttachment[]
+) {
   const result = await classifyEmail({
     emailBody,
-    attachmentFilenames,
+    attachmentFilenames: attachments.map((a) => a.filename),
     requiredDocs: employee.requiredDocs,
     receivedDocs: employee.receivedDocs,
   });
@@ -40,27 +45,87 @@ async function handleClassifiedEmail(employee: Employee, emailBody: string, atta
   }
 
   if (result.type === "documents") {
-    const merged = Array.from(new Set([...employee.receivedDocs, ...result.providedDocs]));
-    const stillMissing = employee.requiredDocs.filter((d) => !merged.includes(d));
+    const stillNeeded = employee.requiredDocs.filter(
+      (d) => !employee.docValidations.some((v) => v.docType === d && v.verdict === "VALID")
+    );
 
-    if (stillMissing.length === 0) {
-      updateEmployee(employee.id, { receivedDocs: merged, status: "ALL_DOCS" });
-      logEvent(employee.id, "ALL_DOCS", `All required documents received: ${merged.join(", ")}`);
-    } else {
-      updateEmployee(employee.id, {
-        receivedDocs: merged,
-        status: "PARTIAL_DOCS",
-        paused: true,
-      });
+    if (attachments.length > stillNeeded.length) {
+      await sendTooManyDocumentsEmail(employee, stillNeeded);
       logEvent(
         employee.id,
-        "PARTIAL_DOCS",
-        `Received: ${result.providedDocs.join(", ") || "none new"}. Still missing: ${stillMissing.join(", ")}`
+        "TOO_MANY_DOCS",
+        `Received ${attachments.length} attachment(s) but only ${stillNeeded.length} document(s) are still needed. Asked candidate to resend only what's requested.`
       );
-      const employeeAfterUpdate = getEmployee(employee.id)!;
-      await sendMissingDocsFollowUpEmail(employeeAfterUpdate, stillMissing);
-      logEvent(employee.id, "FOLLOW_UP_SENT", `Sent single follow-up listing missing docs: ${stillMissing.join(", ")}`);
+      return;
     }
+
+    const { merged, newResults } = await validateAttachments(employee, attachments);
+
+    for (const r of newResults) {
+      logEvent(
+        employee.id,
+        "DOC_VALIDATED",
+        `"${r.filename}" → ${r.docType} — ${r.verdict} (confidence ${r.confidence.toFixed(2)})${
+          r.issues.length ? `. Issues: ${r.issues.join("; ")}` : ""
+        }`
+      );
+    }
+
+    const receivedDocs = employee.requiredDocs.filter((d) =>
+      merged.some((v) => v.docType === d && v.verdict === "VALID")
+    );
+    const needsHumanReview = newResults.some(
+      (r) => r.verdict === "INCONSISTENT" || r.verdict === "LOW_CONFIDENCE"
+    );
+
+    if (needsHumanReview) {
+      updateEmployee(employee.id, {
+        receivedDocs,
+        docValidations: merged,
+        paused: true,
+        status: "HR_INTERVENTION",
+      });
+      const flagged = newResults.filter(
+        (r) => r.verdict === "INCONSISTENT" || r.verdict === "LOW_CONFIDENCE"
+      );
+      logEvent(
+        employee.id,
+        "HR_INTERVENTION",
+        `Document(s) need human review: ${flagged.map((r) => `${r.docType} (${r.verdict})`).join(", ")}`
+      );
+      return;
+    }
+
+    const stillMissing = employee.requiredDocs.filter((d) => !receivedDocs.includes(d));
+
+    if (stillMissing.length === 0) {
+      updateEmployee(employee.id, { receivedDocs, docValidations: merged, status: "ALL_DOCS" });
+      logEvent(employee.id, "ALL_DOCS", `All required documents received and validated: ${receivedDocs.join(", ")}`);
+      return;
+    }
+
+    // Unpaused (not indefinitely paused): the normal reminder cadence (reminderCount/
+    // MAX_REMINDERS in tick.ts) picks this back up automatically if the candidate doesn't
+    // respond again, using the same detailed "what's still outstanding" content.
+    const nextActionAt = new Date(Date.now() + config.reminderGapMinutes * 60_000).toISOString();
+    updateEmployee(employee.id, {
+      receivedDocs,
+      docValidations: merged,
+      status: "PARTIAL_DOCS",
+      paused: false,
+      nextActionAt,
+    });
+
+    const { notReceived, needsResubmission } = summarizeDocState({
+      requiredDocs: employee.requiredDocs,
+      docValidations: merged,
+    });
+
+    logEvent(employee.id, "PARTIAL_DOCS", `Still missing: ${stillMissing.join(", ")}`);
+
+    const employeeAfterUpdate = getEmployee(employee.id)!;
+    await sendDocumentFeedbackEmail(employeeAfterUpdate, notReceived, needsResubmission);
+    logEvent(employee.id, "FOLLOW_UP_SENT", `Sent document feedback email.`);
     return;
   }
 
@@ -93,7 +158,13 @@ export async function pollInbox(): Promise<void> {
         const parsed = await simpleParser(message.source);
         const fromAddress = parsed.from?.value?.[0]?.address || "";
         const bodyText = parsed.text || parsed.html?.toString() || "";
-        const attachmentFilenames = (parsed.attachments || []).map((a) => a.filename || "attachment");
+        // Attachment bytes come straight from the parsed MIME source (already in memory
+        // from the fetch above) — never written to disk, discarded once this loop iteration ends.
+        const attachments: RawAttachment[] = (parsed.attachments || []).map((a) => ({
+          filename: a.filename || "attachment",
+          contentType: a.contentType || "",
+          content: a.content,
+        }));
 
         // Mark seen regardless of whether we can match, to avoid reprocessing loops.
         await client.messageFlagsAdd({ uid: String(uid) } as any, ["\\Seen"], { uid: true });
@@ -112,7 +183,7 @@ export async function pollInbox(): Promise<void> {
         const freshEmployee = getEmployee(employee.id)!;
 
         try {
-          await handleClassifiedEmail(freshEmployee, bodyText, attachmentFilenames);
+          await handleClassifiedEmail(freshEmployee, bodyText, attachments);
         } catch (err: any) {
           logEvent(employee.id, "ERROR", `Failed to process inbound email: ${err.message}`);
         }

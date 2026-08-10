@@ -3,12 +3,14 @@ import type { Employee } from "./types";
 import { fetchEmployees, runTick } from "./api";
 import { AddEmployeeModal } from "./components/AddEmployeeModal";
 import { EmployeeRow } from "./components/EmployeeRow";
+import { RequestMoreDocsModal } from "./components/RequestMoreDocsModal";
 
 const POLL_INTERVAL_MS = 4000;
 
 export default function App() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [showModal, setShowModal] = useState(false);
+  const [requestDocsFor, setRequestDocsFor] = useState<Employee | null>(null);
   const [running, setRunning] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
@@ -81,11 +83,16 @@ export default function App() {
                 <th className="px-4 py-3 font-medium">Reminders</th>
                 <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 font-medium">Docs</th>
+                <th className="px-4 py-3 font-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
               {employees.map((emp) => (
-                <EmployeeRow key={emp.id} employee={emp} />
+                <EmployeeRow
+                  key={emp.id}
+                  employee={emp}
+                  onRequestMoreDocs={() => setRequestDocsFor(emp)}
+                />
               ))}
             </tbody>
           </table>
@@ -102,6 +109,14 @@ export default function App() {
 
       {showModal && (
         <AddEmployeeModal onClose={() => setShowModal(false)} onCreated={refresh} />
+      )}
+
+      {requestDocsFor && (
+        <RequestMoreDocsModal
+          employee={requestDocsFor}
+          onClose={() => setRequestDocsFor(null)}
+          onRequested={refresh}
+        />
       )}
     </div>
   );

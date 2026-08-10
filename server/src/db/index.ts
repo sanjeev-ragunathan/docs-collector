@@ -40,6 +40,7 @@ for (const stmt of [
   `ALTER TABLE employees ADD COLUMN emailSubject TEXT NOT NULL DEFAULT ''`,
   `ALTER TABLE employees ADD COLUMN lastMessageId TEXT`,
   `ALTER TABLE employees ADD COLUMN threadReferences TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE employees ADD COLUMN docValidations TEXT NOT NULL DEFAULT '[]'`,
 ]) {
   try {
     db.exec(stmt);

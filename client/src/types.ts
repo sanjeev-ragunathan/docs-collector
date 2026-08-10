@@ -13,6 +13,32 @@ export interface EventRow {
   createdAt: string;
 }
 
+export type DocVerdict =
+  | "VALID"
+  | "WRONG_TYPE"
+  | "EXPIRED"
+  | "INCONSISTENT"
+  | "LOW_CONFIDENCE"
+  | "ILLEGIBLE";
+
+export interface DocFields {
+  fullName: string | null;
+  dateOfBirth: string | null;
+  expirationDate: string | null;
+  documentNumber: string | null;
+}
+
+export interface DocValidation {
+  docType: string;
+  detectedType: string;
+  verdict: DocVerdict;
+  confidence: number;
+  fields: DocFields;
+  issues: string[];
+  filename: string;
+  validatedAt: string;
+}
+
 export interface Employee {
   id: number;
   name: string;
@@ -25,6 +51,7 @@ export interface Employee {
   paused: boolean;
   nextActionAt: string | null;
   createdAt: string;
+  docValidations: DocValidation[];
   events: EventRow[];
 }
 

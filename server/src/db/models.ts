@@ -1,4 +1,5 @@
 import { db } from "./index";
+import type { DocValidation } from "../agent/validator";
 
 export type EmployeeStatus =
   | "REQUEST_SENT"
@@ -22,12 +23,15 @@ export interface EmployeeRow {
   emailSubject: string;
   lastMessageId: string | null;
   threadReferences: string;
+  docValidations: string; // JSON DocValidation[]
 }
 
-export interface Employee extends Omit<EmployeeRow, "requiredDocs" | "receivedDocs" | "paused"> {
+export interface Employee
+  extends Omit<EmployeeRow, "requiredDocs" | "receivedDocs" | "paused" | "docValidations"> {
   requiredDocs: string[];
   receivedDocs: string[];
   paused: boolean;
+  docValidations: DocValidation[];
 }
 
 export interface EventRow {
@@ -44,6 +48,7 @@ function rowToEmployee(row: EmployeeRow): Employee {
     requiredDocs: JSON.parse(row.requiredDocs),
     receivedDocs: JSON.parse(row.receivedDocs),
     paused: !!row.paused,
+    docValidations: JSON.parse(row.docValidations || "[]"),
   };
 }
 
@@ -103,6 +108,7 @@ export function updateEmployee(
     paused: boolean;
     nextActionAt: string | null;
     receivedDocs: string[];
+    docValidations: DocValidation[];
   }>
 ): void {
   const sets: string[] = [];
@@ -128,9 +134,28 @@ export function updateEmployee(
     sets.push("receivedDocs = @receivedDocs");
     params.receivedDocs = JSON.stringify(fields.receivedDocs);
   }
+  if (fields.docValidations !== undefined) {
+    sets.push("docValidations = @docValidations");
+    params.docValidations = JSON.stringify(fields.docValidations);
+  }
   if (sets.length === 0) return;
 
   db.prepare(`UPDATE employees SET ${sets.join(", ")} WHERE id = @id`).run(params);
+}
+
+/**
+ * HR-initiated request for extra documents beyond what was originally required.
+ * Reopens the reminder cycle for this employee: unpauses, resets the reminder
+ * count, and schedules the next reminder as if this were a fresh request.
+ */
+export function addAdditionalDocs(id: number, additionalDocs: string[], nextActionAt: string): Employee {
+  const employee = getEmployee(id);
+  if (!employee) throw new Error("Employee not found");
+  const requiredDocs = Array.from(new Set([...employee.requiredDocs, ...additionalDocs]));
+  db.prepare(
+    `UPDATE employees SET requiredDocs = ?, status = 'REQUEST_SENT', paused = 0, reminderCount = 0, nextActionAt = ? WHERE id = ?`
+  ).run(JSON.stringify(requiredDocs), nextActionAt, id);
+  return getEmployee(id)!;
 }
 
 /**

@@ -6,7 +6,12 @@ been received, and escalates to HR when it can't handle something on its own.
 
 **Stack:** React + Vite + TypeScript + Tailwind (client) · Node + Express + TypeScript + node-cron
 (server, single process) · SQLite via better-sqlite3 · nodemailer (send) + imapflow (read) over
-Gmail · `@anthropic-ai/sdk` (`claude-sonnet-5`) for email classification.
+Gmail · `@anthropic-ai/sdk` (`claude-sonnet-5`) for email classification and multimodal document
+validation.
+
+**Documents are never persisted.** Attachment bytes are pulled into memory for the duration of
+one poll cycle, sent to Claude for validation, and discarded — only the structured validation
+result (detected type, extracted fields, verdict, confidence, issues) is stored in SQLite.
 
 ---
 
@@ -78,8 +83,9 @@ seed. Every demo run starts from a clean slate unless you delete this file yours
 ## 4. Demo Script (5 steps)
 
 This walks through the full loop: initial request → reminder → a candidate question (both in-scope
-and out-of-scope) → partial docs → all docs. Use a second real email address you control (e.g. a
-personal Gmail) to play the "candidate" and reply to the agent's emails from there.
+and out-of-scope) → document validation (valid, wrong-type, expired, and a name mismatch across two
+docs) → all docs. Use a second real email address you control (e.g. a personal Gmail) to play the
+"candidate" and reply to the agent's emails from there.
 
 ### Step 1 — Initial request email
 
@@ -87,7 +93,7 @@ personal Gmail) to play the "candidate" and reply to the agent's emails from the
 2. Fill in the candidate's name, use an email address you control, check 2–3 documents (e.g.
    Passport, Transcript), optionally add a note, click **Collect Docs**.
 3. Within a few seconds the table shows the new row with status **Request Sent**. Check the
-   candidate's inbox — they've received a `[DOC-<id>]` welcome email listing the required docs.
+   candidate's inbox — they've received a welcome email listing the required docs.
 4. Click the row to expand the event timeline and confirm a `REQUEST_SENT` event logged.
 
 ### Step 2 — A reminder fires automatically
@@ -117,21 +123,53 @@ personal Gmail) to play the "candidate" and reply to the agent's emails from the
 
    → Start a fresh employee row for the remaining steps, since this one is now paused.
 
-### Step 4 — Partial document submission
+### Step 4 — A valid document, but not all of them
 
-1. Reply to the request email with **one but not all** of the required documents attached (any
-   file works — the agent infers presence from filenames/body, it never reads contents).
+1. Reply to the request email with **one genuinely valid document** attached (a real or realistic
+   passport/license/transcript image or PDF — Claude actually reads it, so a blank or placeholder
+   file will come back `ILLEGIBLE`).
 2. Click **Run Agent Now**.
-3. Status flips to **Partial Docs**, the row pauses, and the candidate receives a single follow-up
-   email listing exactly what's still missing. No further reminders go out per the spec — only
-   this one follow-up.
+3. Status flips to **Partial Docs**, the row pauses, and the candidate receives a feedback email
+   listing what's still outstanding. Expand the row — the new **Document Validation** panel shows
+   a green `VALID` badge for the submitted doc with its extracted name/DOB/expiry and confidence
+   score. A `DOC_VALIDATED` event is logged.
 
-### Step 5 — All documents received
+### Step 4b — A wrong-type document
 
-1. Reply once more with the remaining missing document(s) attached.
+1. Reply with a document that doesn't match anything still outstanding for this candidate (e.g.
+   send a Driver's License when only a Passport and Transcript are required).
 2. Click **Run Agent Now**.
-3. Status flips to **All Docs** (green badge) — onboarding document collection is complete, no
-   further agent action will be taken on this employee.
+3. The validation panel shows a red `WRONG_TYPE` badge with the mismatch explained in the issues
+   list. It is **not** marked received — the candidate gets a feedback email asking specifically
+   for a corrected resubmission of that document, without disturbing anything already valid.
+
+### Step 4c — An expired document
+
+1. Reply with a document whose expiration date (visible on the document itself) is in the past.
+2. Click **Run Agent Now**.
+3. The validation panel shows a red `EXPIRED` badge, the extracted expiration date, and an issue
+   noting it's expired. The candidate receives a feedback email asking for a current copy — same
+   single-document resubmission flow as Step 4b.
+
+### Step 4d — A name mismatch across two documents
+
+1. With a candidate who has already had one document validated as `VALID` (from Step 4), reply
+   with a **second** document showing a clearly different full name or date of birth.
+2. Click **Run Agent Now**.
+3. Status flips to **HR Intervention** and the row pauses — identity mismatches are never
+   auto-rejected, they always route to a human. The validation panel shows an amber
+   `INCONSISTENT` badge naming which prior document it conflicts with. No automated email is sent;
+   this is meant to be picked up by a person.
+
+   → Start a fresh employee row for the remaining step, since this one is now paused.
+
+### Step 5 — All documents received and valid
+
+1. Reply with valid copies of every required document (across one or more emails, as needed).
+2. Click **Run Agent Now** after each.
+3. Once every required document has a `VALID` verdict, status flips to **All Docs** (green badge)
+   — onboarding document collection is complete, no further agent action will be taken on this
+   employee. The validation panel shows a green badge for every required document.
 
 ---
 
@@ -143,14 +181,28 @@ personal Gmail) to play the "candidate" and reply to the agent's emails from the
 1. **Reminder engine** — for every non-paused employee not in `ALL_DOCS`/`HR_INTERVENTION` whose
    `nextActionAt` has passed: send a reminder (up to `MAX_REMINDERS`) or escalate to
    `HR_INTERVENTION` once exhausted.
-2. **Inbox poller** — fetches unseen emails via IMAP, matches each to an employee by sender address
-   (falling back to `[DOC-<id>]` in the subject), sends the email body + attachment filenames +
-   the SOP to Claude for classification, and routes the result:
+2. **Inbox poller** — fetches unseen emails via IMAP, matches each to an employee by sender
+   address, sends the email body + attachment filenames + the SOP to Claude for classification,
+   and routes the result:
    - in-scope question → reply directly, no pause
    - out-of-scope question → pause, escalate to HR
-   - documents, all required present → mark `ALL_DOCS`
-   - documents, some still missing → pause, send **one** follow-up listing what's missing
+   - documents → each attachment is validated (see below); required docs only count as received
+     once `VALID`
    - anything else → log and take no action
+3. **Document validator** (`server/src/agent/validator.ts`) — for each attachment on a
+   `"documents"` email: one Claude multimodal call classifies the document (type, extracted
+   fields, legibility, confidence), then deterministic code checks run on top — expiration date,
+   cross-document identity consistency for this candidate, and duplicate document numbers. Each
+   attachment gets one verdict: `VALID`, `WRONG_TYPE`, `EXPIRED`, `INCONSISTENT`,
+   `LOW_CONFIDENCE` (below `CONFIDENCE_THRESHOLD`), or `ILLEGIBLE`.
+   - `VALID` → counts toward the required doc, stops reminders for that doc
+   - `WRONG_TYPE` / `EXPIRED` / `ILLEGIBLE` → one feedback email asking for that specific document
+     to be resubmitted; not marked received
+   - `INCONSISTENT` / `LOW_CONFIDENCE` → **never** auto-rejected — the employee is paused and
+     escalated to `HR_INTERVENTION` for a human to review
+   - Attachment bytes are only ever held in memory for the duration of this validation call, then
+     discarded — only the structured verdict/fields/issues are persisted.
 
-Every action is logged to the `events` table and shown in the row's expandable timeline. Attachment
-*contents* are never stored — only which required documents appear to be present.
+Every action, including each document's validation outcome, is logged to the `events` table and
+shown in the row's expandable timeline, alongside a dedicated Document Validation panel with a
+colored verdict badge, confidence score, and extracted fields per document.
