@@ -1,12 +1,4 @@
-<div align="center">
-
-# 📄 New Hire Document Collection Agent
-
-**All your document collection in one place.**
-
-</div>
-
----
+<img src="./images/readme-banner.png" width="100%" alt="doc collection agent banner">
 
 ## Features
 
@@ -24,8 +16,6 @@
 - Keeps every email in one Gmail thread instead of starting new conversations
 - Lets HR request extra documents at any time, beyond the original request
 - One dashboard: live status badges, per-document validation results, and a full event timeline per candidate
-
----
 
 ## Run
 
@@ -100,8 +90,6 @@ immediately instead of waiting for the next tick (handy for demos), trigger it m
 ```bash
 curl -X POST http://localhost:4000/tick
 ```
-
----
 
 ## Demo Script
 
@@ -197,8 +185,6 @@ docs) → all docs. Use a second real email address you control (e.g. a personal
 **Bonus:** click **Request More Docs** on any row to ask that candidate for something outside the
 original list — it restarts the same request/reminder cycle for just the new document(s).
 
----
-
 ## Workflow Diagram
 
 ```
@@ -252,10 +238,3 @@ same request/reminder flow for just those docs.
 
 This is exactly what `runTick()` (`server/src/agent/tick.ts`) does on every cron cycle: run the
 reminder engine, then poll the inbox and classify/validate anything new.
-
----
-
-## License
-
-No license specified — this is a take-home/interview project, not intended for reuse or
-distribution.
