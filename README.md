@@ -17,6 +17,60 @@
 - Lets HR request extra documents at any time, beyond the original request
 - One dashboard: live status badges, per-document validation results, and a full event timeline per candidate
 
+## Workflow Diagram
+
+```
+HR adds employee (name, email, required docs)
+        │
+        ▼
+Initial request email sent ──────────────► status: REQUEST_SENT
+        │
+        ├── no reply in time ──► reminder email sent ──► status: REMINDER_SENT
+        │         │                                            │
+        │         └── repeats up to MAX_REMINDERS ──► still nothing ──► status: HR_INTERVENTION
+        │
+        └── candidate replies
+                │
+                ▼
+        Claude classifies the email
+                │
+        ┌───────┼────────────────┐
+        ▼                        ▼
+    question                 documents attached
+        │                        │
+   in-scope? ──yes──► answered   ├── too many attached ──► "send only what's needed" email
+        │                        │
+        no                       ▼
+        │                Claude validates each doc
+        ▼                        │
+  status: HR_INTERVENTION   ┌────┼─────────────────────┐
+  (needs a human)           ▼    ▼                      ▼
+                          VALID  WRONG_TYPE/EXPIRED/   INCONSISTENT/
+                            │    ILLEGIBLE              LOW_CONFIDENCE
+                            │      │                      │
+                     counts as   feedback email        status: HR_INTERVENTION
+                     received    naming the exact       (never auto-rejected —
+                            │    issue + resend ask      always a human call)
+                            │      │
+                            └──────┘
+                                │
+                    all required docs VALID?
+                        │              │
+                       yes             no
+                        │              │
+                        ▼              ▼
+                 status: ALL_DOCS   status: PARTIAL_DOCS
+                 (done, no more     (rejoins the normal
+                  reminders)         reminder cadence)
+
+HR can, at any time: click "Request More Docs" to ask for
+extra documents outside the original list — restarts the
+same request/reminder flow for just those docs.
+```
+
+This is exactly what `runTick()` (`server/src/agent/tick.ts`) does on every cron cycle: run the
+reminder engine, then poll the inbox and classify/validate anything new.
+
 ## Run
 
 ### 1. Create a Gmail App Password
@@ -184,57 +238,3 @@ docs) → all docs. Use a second real email address you control (e.g. a personal
 
 **Bonus:** click **Request More Docs** on any row to ask that candidate for something outside the
 original list — it restarts the same request/reminder cycle for just the new document(s).
-
-## Workflow Diagram
-
-```
-HR adds employee (name, email, required docs)
-        │
-        ▼
-Initial request email sent ──────────────► status: REQUEST_SENT
-        │
-        ├── no reply in time ──► reminder email sent ──► status: REMINDER_SENT
-        │         │                                            │
-        │         └── repeats up to MAX_REMINDERS ──► still nothing ──► status: HR_INTERVENTION
-        │
-        └── candidate replies
-                │
-                ▼
-        Claude classifies the email
-                │
-        ┌───────┼────────────────┐
-        ▼                        ▼
-    question                 documents attached
-        │                        │
-   in-scope? ──yes──► answered   ├── too many attached ──► "send only what's needed" email
-        │                        │
-        no                       ▼
-        │                Claude validates each doc
-        ▼                        │
-  status: HR_INTERVENTION   ┌────┼─────────────────────┐
-  (needs a human)           ▼    ▼                      ▼
-                          VALID  WRONG_TYPE/EXPIRED/   INCONSISTENT/
-                            │    ILLEGIBLE              LOW_CONFIDENCE
-                            │      │                      │
-                     counts as   feedback email        status: HR_INTERVENTION
-                     received    naming the exact       (never auto-rejected —
-                            │    issue + resend ask      always a human call)
-                            │      │
-                            └──────┘
-                                │
-                    all required docs VALID?
-                        │              │
-                       yes             no
-                        │              │
-                        ▼              ▼
-                 status: ALL_DOCS   status: PARTIAL_DOCS
-                 (done, no more     (rejoins the normal
-                  reminders)         reminder cadence)
-
-HR can, at any time: click "Request More Docs" to ask for
-extra documents outside the original list — restarts the
-same request/reminder flow for just those docs.
-```
-
-This is exactly what `runTick()` (`server/src/agent/tick.ts`) does on every cron cycle: run the
-reminder engine, then poll the inbox and classify/validate anything new.
